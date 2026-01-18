@@ -479,6 +479,7 @@ class DamaiGUI:
             "keyword": tk.StringVar(value=""),
             "city": tk.StringVar(value=""),
             "date": tk.StringVar(value=""),
+            "date_index": tk.StringVar(value=""),
             "price": tk.StringVar(value=""),
             # 推荐：优先从第一个票档开始（如需其它档位请修改为实际索引）
             "price_index": tk.StringVar(value="0"),
@@ -756,17 +757,24 @@ class DamaiGUI:
         keyword_entry = ttk.Entry(ticket_frame, textvariable=self.app_form_vars["keyword"], width=24)
         keyword_entry.grid(row=0, column=1, sticky="we", padx=(5, 0), pady=2)
         self.app_form_entries["keyword"] = keyword_entry
-    
+
+        # 日期和票价文本字段保留但不显示在界面上（用于后端处理）
+        date_entry = ttk.Entry(ticket_frame, textvariable=self.app_form_vars["date"], width=24)
+        self.app_form_entries["date"] = date_entry
+        
+        price_entry = ttk.Entry(ticket_frame, textvariable=self.app_form_vars["price"], width=24)
+        self.app_form_entries["price"] = price_entry
+
         ttk.Label(ticket_frame, text="城市").grid(row=0, column=2, sticky="w", pady=2)
         city_entry = ttk.Entry(ticket_frame, textvariable=self.app_form_vars["city"], width=24)
         city_entry.grid(row=0, column=3, sticky="we", padx=(5, 0), pady=2)
         self.app_form_entries["city"] = city_entry
-    
-        ttk.Label(ticket_frame, text="票价文本").grid(row=1, column=0, sticky="w", pady=2)
-        price_entry = ttk.Entry(ticket_frame, textvariable=self.app_form_vars["price"], width=24)
-        price_entry.grid(row=1, column=1, sticky="we", padx=(5, 0), pady=2)
-        self.app_form_entries["price"] = price_entry
-    
+
+        ttk.Label(ticket_frame, text="日期索引").grid(row=1, column=0, sticky="w", pady=2)
+        date_index_entry = ttk.Entry(ticket_frame, textvariable=self.app_form_vars["date_index"], width=24)
+        date_index_entry.grid(row=1, column=1, sticky="we", padx=(5, 0), pady=2)
+        self.app_form_entries["date_index"] = date_index_entry
+
         ttk.Label(ticket_frame, text="票价索引").grid(row=1, column=2, sticky="w", pady=2)
         price_index_entry = ttk.Entry(ticket_frame, textvariable=self.app_form_vars["price_index"], width=24)
         price_index_entry.grid(row=1, column=3, sticky="we", padx=(5, 0), pady=2)
@@ -776,14 +784,13 @@ class DamaiGUI:
         wait_entry = ttk.Entry(ticket_frame, textvariable=self.app_form_vars["wait_timeout"], width=24)
         wait_entry.grid(row=2, column=1, sticky="we", padx=(5, 0), pady=2)
         self.app_form_entries["wait_timeout"] = wait_entry
-    
+
         ttk.Label(ticket_frame, text="重试间隔(s)").grid(row=2, column=2, sticky="w", pady=2)
         retry_entry = ttk.Entry(ticket_frame, textvariable=self.app_form_vars["retry_delay"], width=24)
         retry_entry.grid(row=2, column=3, sticky="we", padx=(5, 0), pady=2)
         self.app_form_entries["retry_delay"] = retry_entry
 
         # 自动提交订单开关（从高级选项迁移到抢票信息分组）
-        ttk.Label(ticket_frame, text="自动提交订单").grid(row=3, column=0, sticky="w", pady=2)
         commit_check = ttk.Checkbutton(
             ticket_frame,
             text="完成下单流程后自动提交",
@@ -791,7 +798,7 @@ class DamaiGUI:
             onvalue=True,
             offvalue=False,
         )
-        commit_check.grid(row=3, column=1, columnspan=3, sticky="w", pady=2)
+        commit_check.grid(row=3, column=0, columnspan=4, sticky="w", pady=2)
         self.app_form_entries["if_commit_order"] = commit_check
 
         viewers_note = ttk.Label(ticket_frame, text="观演人：默认全选，无需填写", foreground="gray")
@@ -992,6 +999,8 @@ class DamaiGUI:
         self.app_form_vars["keyword"].set(getattr(config, "keyword", "") or "")
         self.app_form_vars["city"].set(getattr(config, "city", "") or "")
         self.app_form_vars["date"].set(getattr(config, "date", "") or "")
+        date_index = getattr(config, "date_index", None)
+        self.app_form_vars["date_index"].set(str(date_index) if date_index is not None else "")
         self.app_form_vars["price"].set(getattr(config, "price", "") or "")
 
         price_index = getattr(config, "price_index", None)
@@ -1029,6 +1038,7 @@ class DamaiGUI:
                         "users": list(getattr(base_config, "users", []) or []),
                         "city": getattr(base_config, "city", None),
                         "date": getattr(base_config, "date", None),
+                        "date_index": getattr(base_config, "date_index", None),
                         "price": getattr(base_config, "price", None),
                         "price_index": getattr(base_config, "price_index", None),
                         "if_commit_order": getattr(base_config, "if_commit_order", True),
@@ -1044,9 +1054,17 @@ class DamaiGUI:
         elif "server_url" not in payload:
             payload["server_url"] = ""
 
-        for key in ("keyword", "city", "price"):
+        for key in ("keyword", "city", "date", "price"):
             value = self.app_form_vars[key].get().strip()
             payload[key] = value or None
+
+        date_index_raw = self.app_form_vars["date_index"].get().strip()
+        if date_index_raw:
+            payload["date_index"] = date_index_raw
+        elif base_config is not None:
+            payload["date_index"] = getattr(base_config, "date_index", None)
+        else:
+            payload["date_index"] = None
 
         price_index_raw = self.app_form_vars["price_index"].get().strip()
         if price_index_raw:
@@ -1322,6 +1340,9 @@ class DamaiGUI:
             summary_lines.append(f"💰 价格: {config.price}")
         if config.price_index is not None:
             summary_lines.append(f"🎯 价格索引: {config.price_index}")
+        if config.date is not None:
+            summary_lines.append(f"📅 日期: {config.date}")
+
         summary_lines.append("👥 观演人: 默认全选")
         summary_lines.append(f"🕒 等待超时: {config.wait_timeout}s")
         summary_lines.append(f"🔁 重试间隔: {config.retry_delay}s")

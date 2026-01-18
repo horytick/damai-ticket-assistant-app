@@ -198,6 +198,11 @@ class AppTicketConfigModel(BaseModel):
     users: List[str] = Field(default_factory=list)
     city: Optional[str] = None
     date: Optional[str] = None
+    date_index: Optional[int] = Field(
+        default=None,
+        ge=0,
+        validation_alias=AliasChoices("date_index", "dateIndex"),
+    )
     price: Optional[str] = None
     price_index: Optional[int] = Field(
         default=None,
@@ -261,17 +266,19 @@ class AppTicketConfigModel(BaseModel):
             return _clean_users(value)
         raise ValueError("users 必须是字符串数组")
 
-    @field_validator("price_index", mode="before")
+    @field_validator("date_index", "price_index", mode="before")
     @classmethod
-    def _parse_price_index(cls, value: Any) -> Optional[int]:
+    def _parse_index(cls, value: Any, info: ValidationInfo) -> Optional[int]:
         if value is None or (isinstance(value, str) and not value.strip()):
             return None
         try:
             parsed = int(value)
         except (TypeError, ValueError) as exc:
-            raise ValueError("票价索引必须是非负整数") from exc
+            field_name = "日期索引" if "date" in str(info.field_name) else "票价索引"
+            raise ValueError(f"{field_name}必须是非负整数") from exc
         if parsed < 0:
-            raise ValueError("票价索引必须是非负整数")
+            field_name = "日期索引" if "date" in str(info.field_name) else "票价索引"
+            raise ValueError(f"{field_name}必须是非负整数")
         return parsed
 
     @field_validator("device_caps", mode="before")
@@ -416,6 +423,7 @@ class AppTicketConfig:
     users: List[str] = field(default_factory=list)
     city: Optional[str] = None
     date: Optional[str] = None
+    date_index: Optional[int] = None
     price: Optional[str] = None
     price_index: Optional[int] = None
     if_commit_order: bool = True
@@ -426,6 +434,8 @@ class AppTicketConfig:
     def __post_init__(self) -> None:
         self.server_url = _normalise_server_url(self.server_url)
         self.users = _clean_users(self.users)
+        if self.date_index is not None and self.date_index < 0:
+            raise ValueError("date_index 不能为负数")
         if self.price_index is not None and self.price_index < 0:
             raise ValueError("price_index 不能为负数")
 

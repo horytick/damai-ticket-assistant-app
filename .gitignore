@@ -223,3 +223,5 @@ damai_installer/installer_files/wheels/*.whl
 
 # Executable files
 *.exe
+
+log.txt

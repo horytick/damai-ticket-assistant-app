@@ -44,6 +44,7 @@ class RunnerPhase(str, Enum):
     SELECTING_QUANTITY = "selecting_quantity"
     CONFIRMING_PURCHASE = "confirming_purchase"
     SELECTING_USERS = "selecting_users"
+    SELECTING_DATE = "selecting_date"
     SUBMITTING_ORDER = "submitting_order"
     COMPLETED = "completed"
     STOPPED = "stopped"
@@ -352,6 +353,12 @@ class DamaiAppTicketRunner:
                 raise TicketRunnerError("未能找到预约/购买入口")
 
             self._ensure_not_stopped()
+            if self.config.date_index is not None or self.config.date:
+                self._transition_to(RunnerPhase.SELECTING_DATE)
+                self._log(LogLevel.STEP, "选择日期")
+                self._select_date()
+
+            self._ensure_not_stopped()
             if self.config.price_index is not None:
                 self._transition_to(RunnerPhase.SELECTING_PRICE)
                 self._log(LogLevel.STEP, "选择票价")
@@ -500,6 +507,141 @@ class DamaiAppTicketRunner:
             (By.XPATH, '//*[contains(@text,"预约") or contains(@text,"购买")]'),
         ]
         return self._smart_wait_and_click(selectors[0], selectors[1:])
+
+    def _select_date(self) -> bool:
+        """Robust date selection with multiple fallbacks and auto-scroll.
+
+        Strategy:
+        - Wait for date container id to appear
+        - Prefer clickable ViewGroup list (as per XML structure)
+        - Prioritize index from config.date_index, scroll container if target not in view
+        - Optional text fallback when config.date present
+        """
+        if self.config.date_index is None and not self.config.date:
+            return False
+
+        driver = self._ensure_driver()
+        wait = WebDriverWait(driver, max(self.config.wait_timeout, 1.0))
+        container_ids = [
+            "cn.damai:id/project_detail_perform_flowlayout",
+            # 若 UI 变更，可尝试其它容器 id（兼容大小写或新命名）
+            "cn.damai:id/project_detail_perform_flowLayout",
+            "cn.damai:id/project_detail_perform_layout",
+        ]
+
+        container = None
+        for cid in container_ids:
+            try:
+                container = wait.until(EC.presence_of_element_located((By.ID, cid)))
+                break
+            except TimeoutException:
+                continue
+
+        if container is None:
+            self._log(LogLevel.WARNING, "未找到场次容器，跳过日期选择")
+            return False
+
+        # 收集候选子项（优先 ViewGroup 且 clickable，如 XML 中的结构）
+        try:
+            items = container.find_elements(By.XPATH, './/android.view.ViewGroup[@clickable="true"]')
+            if not items:
+                # 退化为查找任何可点击子元素
+                items = container.find_elements(By.XPATH, './/*[@clickable="true"]')
+        except Exception as exc:  # noqa: BLE001
+            self._log(LogLevel.WARNING, f"收集场次子项失败: {exc}")
+            items = []
+
+        # 优先使用 date_index 按索引选择目标
+        target_elem = None
+        if self.config.date_index is not None:
+            idx = int(self.config.date_index)
+            if items and 0 <= idx < len(items):
+                target_elem = items[idx]
+            else:
+                self._log(
+                    LogLevel.WARNING,
+                    f"日期索引越界或无可点击子项: index={idx}, items={len(items)}"
+                )
+
+        # 若未命中索引，尝试文本匹配（当 config.date 提供时）
+        if target_elem is None and self.config.date:
+            date_text = str(self.config.date).strip()
+            if date_text:
+                # 优先使用 UiAutomator 文本匹配
+                try:
+                    target_elem = container.find_element(
+                        AppiumBy.ANDROID_UIAUTOMATOR,
+                        f'new UiSelector().textContains("{date_text}")'
+                    )
+                except Exception:
+                    # 退化为 XPath 文本包含
+                    try:
+                        target_elem = container.find_element(By.XPATH, f'.//*[contains(@text,"{date_text}")]')
+                    except Exception:
+                        target_elem = None
+
+                # 如果通过文本未找到，尝试在收集的 items 中查找包含该文本的元素
+                if target_elem is None and items:
+                    for item in items:
+                        try:
+                            if date_text in (item.text or ""):
+                                target_elem = item
+                                break
+                        except Exception:
+                            continue
+
+        if target_elem is None:
+            date_info = f"index={self.config.date_index}" if self.config.date_index is not None else f"text={self.config.date}"
+            self._log(LogLevel.WARNING, f"未找到目标日期项 ({date_info})，跳过日期选择")
+            return False
+
+        # 若目标不在可视范围，尝试在容器内滚动将其带入视图
+        try:
+            # 最多滚动 5 次（方向向下）
+            attempts = 0
+            while attempts < 5 and not target_elem.is_displayed():
+                crect = container.rect
+                try:
+                    driver.execute_script(
+                        "mobile: scrollGesture",
+                        {
+                            "left": crect["x"],
+                            "top": crect["y"],
+                            "width": crect["width"],
+                            "height": crect["height"],
+                            "direction": "down",
+                            "percent": 0.8,
+                        },
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    self._log(LogLevel.WARNING, f"滚动失败: {exc}")
+                    break
+                attempts += 1
+                time.sleep(0.05)
+        except Exception as exc:  # noqa: BLE001
+            self._log(LogLevel.WARNING, f"可视区域检查失败: {exc}")
+
+        # 使用原生 clickGesture 点击目标（优先 elementId）
+        try:
+            if hasattr(target_elem, "id"):
+                driver.execute_script("mobile: clickGesture", {"elementId": target_elem.id})
+            else:
+                rect = target_elem.rect
+                driver.execute_script(
+                    "mobile: clickGesture",
+                    {
+                        "x": rect["x"] + rect["width"] // 2,
+                        "y": rect["y"] + rect["height"] // 2,
+                        "duration": 50,
+                    },
+                )
+            date_info = f"索引 {self.config.date_index}" if self.config.date_index is not None else f"文本 '{self.config.date}'"
+            self._log(LogLevel.INFO, f"✅ 已选择日期 ({date_info})")
+            time.sleep(0.5)
+            return True
+        except Exception as exc:  # noqa: BLE001
+            self._log(LogLevel.WARNING, f"点击日期失败: {exc}")
+            return False
 
     def _select_price(self) -> None:
         """Robust ticket price selection with multiple fallbacks and auto-scroll.

@@ -171,6 +171,20 @@ class DamaiBot:
             if not self.smart_wait_and_click(*book_selectors[0], book_selectors[1:]):
                 print("预约按钮点击失败")
                 return False
+            
+            # 3. 选择日期
+            print("选择日期...")
+            try:
+                # 直接尝试点击日期
+                date_selectors = [
+                    (AppiumBy.ANDROID_UIAUTOMATOR, f'new UiSelector().text("{self.config.date}")'),
+                    (AppiumBy.ANDROID_UIAUTOMATOR, f'new UiSelector().textContains("{self.config.date}")'),
+                ]
+                if not self.smart_wait_and_click(*date_selectors[0], date_selectors[1:]):
+                    print("预约按钮点击失败")
+                    return False
+            except Exception as e:
+                print(f"选择日期失败, 启动备用方案: {e}")
 
             # 3. 票价选择 - 优化查找逻辑
             print("选择票价...")
